@@ -14,7 +14,7 @@ public class PayloadUtils {
     @Inject
     ObjectMapper objectMapper;
     @SneakyThrows
-    public String getPayload(final String path){
-        return objectMapper.readValue( this.getClass().getResource(path), JsonNode.class).toString();
+    public JsonNode getPayload(final String path){
+        return objectMapper.readValue( this.getClass().getResource(path), JsonNode.class);
     }
 }
