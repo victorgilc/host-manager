@@ -1,0 +1,23 @@
+[
+  {
+    "property_id": 555,
+    "person_id": 123,
+    "start": "2024-01-10",
+    "end": "2024-01-15",
+    "type": "BOOKING"
+  },
+  {
+    "property_id": 555,
+    "person_id": 456,
+    "start": "2024-01-15",
+    "end": "2024-01-20",
+    "type": "BOOKING"
+  },
+  {
+    "property_id": 555,
+    "person_id": 666,
+    "start": "2024-01-20",
+    "end": "2024-01-25",
+    "type": "BOOKING"
+  }
+]

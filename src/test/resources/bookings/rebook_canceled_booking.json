@@ -4,10 +4,11 @@
     "person_id": 456,
     "start": "2024-01-15",
     "end": "2024-01-20",
-    "type": "BOOKING"
+    "type": "BOOKING",
+    "canceled": true
   },
   "update_version": {
-    "person_id": 426,
-    "start": "2024-01-22"
+    "end": "2024-01-22",
+    "cancelled": false
   }
 }

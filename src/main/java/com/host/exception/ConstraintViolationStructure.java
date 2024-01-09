@@ -19,10 +19,10 @@ public class ConstraintViolationStructure {
             this.path = "create.booking"+ (StringUtils.isNullOrEmpty(path)?"":"."+path);
         }
 
-        public String constraintType;
-        public String path;
-        public String message;
-        public String value;
+        public final String constraintType;
+        public final String path;
+        public final String message;
+        public final String value;
     }
 }
 

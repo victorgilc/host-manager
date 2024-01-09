@@ -1,11 +1,15 @@
 package com.host;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.host.exception.OverlapMessageWrapper;
+import com.host.exception.PropertyAlreadyBookedException;
 import com.host.model.Booking;
 import com.host.utils.PayloadUtils;
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.http.Method;
 import io.restassured.response.ValidatableResponse;
 import jakarta.inject.Inject;
+import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.SneakyThrows;
@@ -14,6 +18,7 @@ import org.apache.http.HttpStatus;
 import org.apache.http.entity.ContentType;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -22,19 +27,27 @@ import java.util.*;
 import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
+import static io.restassured.RestAssured.when;
 
 @QuarkusTest
 public class BookingResourceTest {
     public static final String START_VERSION_PAYLOAD = "start_version";
     public static final String UPDATE_VERSION_PAYLOAD = "update_version";
     public static final String LOCATION_HEADER = "Location";
-    public static final String END_PAYLOAD_PROPERTY = "end";
-    public static final String START_PAYLOAD_PROPERTY = "start";
-    public static final String GUEST_NAME_PAYLOAD_PROPERTY = "guest_name";
+    public static final String CANCELED_PAYLOAD_PROPERTY = "canceled";
+    public static final String INITIAL_URL_LOCALHOST = "http://localhost:";
+    public static final String MESSAGE_RESPONSE_PROPERTY = "message";
+
     @Inject
     PayloadUtils payloadUtils;
-    @ConfigProperty(name = "quarkus.http.test-port")
+    @ConfigProperty(name= "quarkus.http.test-port")
     int port;
+
+    @BeforeEach
+    @Transactional
+    public void setup(){
+        Booking.deleteAll();
+    }
 
     @SneakyThrows
     @ParameterizedTest
@@ -43,17 +56,11 @@ public class BookingResourceTest {
         var payload = payloadUtils.getPayload(input.payloadPath).toString();
         var validatable = executePost(payload, input.expectedStatus);
 
-        if(HttpStatus.SC_CREATED == input.expectedStatus){
-            validatable.header(LOCATION_HEADER,"http://localhost:"+port+"/booking/1");
-            return;
-        }
-
         if(input.expectedTriggeredValidations.isPresent()){
            var response = validatable.extract().body().as(JsonNode.class);
            checkViolations(response, input.expectedTriggeredValidations.get());
         }
     }
-
 
     @SneakyThrows
     @ParameterizedTest
@@ -66,48 +73,156 @@ public class BookingResourceTest {
         var validatablePost = executePost(startPayload.toString(), HttpStatus.SC_CREATED);
         var location = validatablePost.extract().header(LOCATION_HEADER);
         var booking = getBooking(location);
-
-        var validatablePatch = given()
-            .contentType(ContentType.APPLICATION_JSON.getMimeType())
-            .body(updatePayload.toString())
-        .when()
-            .patch(BookingResource.ROOT_PATH+ "/"+booking.id)
-        .then()
-            .statusCode(input.expectedStatus);
+        var validatablePatch = executePatch(input.expectedStatus, updatePayload, booking);
 
         if(input.expectedTriggeredValidations.isPresent()){
             var response = validatablePatch.extract().body().as(JsonNode.class);
             checkViolations(response, input.expectedTriggeredValidations.get());
         } else {
             var bookingAfterUpdate = getBooking(location);
-            var endUpdatePayload = updatePayload.get(END_PAYLOAD_PROPERTY);
-            var startUpdatePayload =  updatePayload.get(START_PAYLOAD_PROPERTY);
-            var guestUpdatePayload = updatePayload.get(GUEST_NAME_PAYLOAD_PROPERTY);
-            var endInitialPayload = startPayload.get(END_PAYLOAD_PROPERTY);
-            var startInitialPayload = startPayload.get(START_PAYLOAD_PROPERTY);
-            var guestInitialPayload = startPayload.get(GUEST_NAME_PAYLOAD_PROPERTY);
+            var endUpdatePayload = updatePayload.get(Booking.END);
+            var startUpdatePayload =  updatePayload.get(Booking.START);
+            var personIdUpdatePayload = updatePayload.get(Booking.PERSON_ID);
+            var canceledUpdatePayload = updatePayload.get(CANCELED_PAYLOAD_PROPERTY);
+            var endInitialPayload = startPayload.get(Booking.END);
+            var startInitialPayload = startPayload.get(Booking.START);
+            var personIdInitialPayload = startPayload.get(Booking.PERSON_ID);
 
             Assertions.assertAll(
                 ()->Assertions.assertEquals(bookingAfterUpdate.end.toString(),
                     Objects.nonNull(endUpdatePayload)? endUpdatePayload.textValue() :
-                            endInitialPayload.textValue()),
+                        endInitialPayload.textValue()),
 
                 ()->Assertions.assertEquals(bookingAfterUpdate.start.toString(),
                     Objects.nonNull(startUpdatePayload) ? startUpdatePayload.textValue() :
-                            startInitialPayload.textValue()),
+                        startInitialPayload.textValue()),
 
-                ()->Assertions.assertEquals(bookingAfterUpdate.guestName,
-                    Objects.nonNull(guestUpdatePayload) ? guestUpdatePayload.textValue() :
-                            guestInitialPayload.textValue())
+                ()->Assertions.assertEquals(bookingAfterUpdate.personId,
+                    Objects.nonNull(personIdUpdatePayload) ? personIdUpdatePayload.longValue() :
+                        personIdInitialPayload.longValue()),
+
+                ()->Assertions.assertEquals(bookingAfterUpdate.canceled,
+                    Objects.nonNull(canceledUpdatePayload) ? canceledUpdatePayload.toString() :
+                        false)
             );
         }
+    }
+    @ParameterizedTest
+    @MethodSource("methodsWithNonExistentId")
+    public void givenNonExistentBooking_whenCallMethod_thenBadRequest(final Method method){
+        final String nonExistentId = "123";
+
+        var body =
+            given()
+                .contentType(ContentType.APPLICATION_JSON.getMimeType())
+            .when()
+                .request(method, INITIAL_URL_LOCALHOST +port+ BookingResource.ROOT_PATH+nonExistentId)
+            .then()
+                .statusCode(HttpStatus.SC_BAD_REQUEST).extract().body().as(JsonNode.class);
+
+        Assertions.assertEquals("Resource with id '"+nonExistentId+"' doesn't exist",
+                body.get("message").textValue());
+    }
+
+    @Test
+    public void givenExistentBooking_whenCallDelete_thenSucceed(){
+        var validatablePost = executePost(payloadUtils.getPayload("/bookings/valid_booking.json")
+            .toString(), HttpStatus.SC_CREATED);
+        var location = validatablePost.extract().header(LOCATION_HEADER);
+        when()
+            .delete(location)
+        .then()
+            .statusCode(HttpStatus.SC_NO_CONTENT);
+    }
+
+    @Test
+    public void givenExistentBooking_whenCallPost_thenBadRequestDueOverlap(){
+        var payloads = payloadUtils.getPayload("/bookings/booking_create_overlap_validation.json");
+        var initialBook = payloads.get("initial_book");
+        executePost(initialBook.toString(), HttpStatus.SC_CREATED);
+        verifyOverlap(payloads.get("end_date_inside"), initialBook);
+        verifyOverlap(payloads.get("range_inside"), initialBook);
+        verifyOverlap(payloads.get("start_date_inside"), initialBook);
+        verifyOverlap(payloads.get("over_start_and_end"), initialBook);
+    }
+
+    @Test
+    public void givenExistentBooking_whenCallPatch_thenVerifySameBookingOrDiffAndActProperly(){
+        var payloads = payloadUtils.getPayload("/bookings/booking_create_overlap_validation.json");
+        var initialBook = payloads.get("initial_book");
+        var validatablePost = executePost(initialBook.toString(), HttpStatus.SC_CREATED);
+        var location = validatablePost.extract().header(LOCATION_HEADER);
+
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(location)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("end_date_inside"))
+            .expectedStatus(HttpStatus.SC_NO_CONTENT)
+            .build());
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(location)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("range_inside"))
+            .expectedStatus(HttpStatus.SC_NO_CONTENT)
+            .build());
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(location)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("start_date_inside"))
+            .expectedStatus(HttpStatus.SC_NO_CONTENT)
+            .build());
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(location)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("over_start_and_end"))
+            .expectedStatus(HttpStatus.SC_NO_CONTENT)
+            .build());
+
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(INITIAL_URL_LOCALHOST+port+BookingResource.ROOT_PATH+123)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("end_date_inside"))
+            .expectedStatus(HttpStatus.SC_BAD_REQUEST)
+            .build());
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(INITIAL_URL_LOCALHOST+port+BookingResource.ROOT_PATH+123)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("range_inside"))
+            .expectedStatus(HttpStatus.SC_BAD_REQUEST)
+            .build());
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(INITIAL_URL_LOCALHOST+port+BookingResource.ROOT_PATH+123)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("start_date_inside"))
+            .expectedStatus(HttpStatus.SC_BAD_REQUEST)
+            .build());
+        verifyOverlapPatch(OverlapPatchInput.builder()
+            .location(INITIAL_URL_LOCALHOST+port+BookingResource.ROOT_PATH+123)
+            .initialPayload(initialBook)
+            .updatePayload(payloads.get("over_start_and_end"))
+            .expectedStatus(HttpStatus.SC_BAD_REQUEST)
+            .build());
+    }
+
+    @Test
+    public void givenBookingsWithDaysCloseEachOther_whenCallPost_thenSucceed(){
+        var payloads = payloadUtils.getPayload("/bookings/valid_booking_days_close.json");
+        payloads.forEach(p->executePost(p.toString(), HttpStatus.SC_CREATED));
+    }
+
+    public static Stream<Method> methodsWithNonExistentId() {
+        return Stream.of(
+            Method.DELETE,
+            Method.PATCH,
+            Method.GET
+        );
     }
 
     public static Stream<Input> inputsPatch() {
         return Stream.of(
             Input.builder()
                 .expectedStatus(HttpStatus.SC_NO_CONTENT)
-                .payloadPath("/bookings/valid_booking_update_dates_and_guest_name.json")
+                .payloadPath("/bookings/valid_booking_update_dates_and_person_id.json")
                 .expectedTriggeredValidations(Optional.empty())
             .build(),
             Input.builder()
@@ -122,7 +237,17 @@ public class BookingResourceTest {
             .build(),
             Input.builder()
                 .expectedStatus(HttpStatus.SC_NO_CONTENT)
-                .payloadPath("/bookings/booking_update_just_guest.json")
+                .payloadPath("/bookings/booking_update_just_person_id.json")
+                .expectedTriggeredValidations(Optional.empty())
+            .build(),
+            Input.builder()
+                .expectedStatus(HttpStatus.SC_NO_CONTENT)
+                .payloadPath("/bookings/booking_update_and_cancel.json")
+                .expectedTriggeredValidations(Optional.empty())
+            .build(),
+            Input.builder()
+                .expectedStatus(HttpStatus.SC_NO_CONTENT)
+                .payloadPath("/bookings/rebook_canceled_booking.json")
                 .expectedTriggeredValidations(Optional.empty())
             .build(),
             Input.builder()
@@ -153,7 +278,7 @@ public class BookingResourceTest {
                                     "must not be null"),
                             new ExpectedValidationMessagesPerPath("create.booking.end",
                                     "must not be null"),
-                            new ExpectedValidationMessagesPerPath("create.booking.guestName",
+                            new ExpectedValidationMessagesPerPath("create.booking.personId",
                                     "must not be null")
                         )
                     )
@@ -161,7 +286,7 @@ public class BookingResourceTest {
             .build(),
             Input.builder()
                 .expectedStatus(HttpStatus.SC_BAD_REQUEST)
-                .payloadPath("/bookings/booking_end_date_greater_start_date.json")
+                .payloadPath("/bookings/booking_start_date_greater_end_date.json")
                 .expectedTriggeredValidations(
                     Optional.of(
                         List.of(
@@ -185,6 +310,62 @@ public class BookingResourceTest {
                 .statusCode(expectedStatus);
     }
 
+    private static ValidatableResponse executePatch(final int expectedStatus, final JsonNode updatePayload, final String location) {
+        return
+            given()
+                .contentType(ContentType.APPLICATION_JSON.getMimeType())
+                .body(updatePayload.toString())
+            .when()
+                .patch(location)
+            .then()
+                .statusCode(expectedStatus);
+    }
+
+    private static ValidatableResponse executePatch(final int expectedStatus, final JsonNode updatePayload, final Booking booking) {
+        return executePatch(expectedStatus, updatePayload, BookingResource.ROOT_PATH+ booking.id);
+    }
+
+    private void verifyOverlapPatch(final OverlapPatchInput overlapPatchInput) {
+        var validatable = executePatch(overlapPatchInput.expectedStatus,
+                overlapPatchInput.updatePayload, overlapPatchInput.location);
+
+        if(HttpStatus.SC_NO_CONTENT != overlapPatchInput.expectedStatus){
+            var body = validatable.extract().body().as(JsonNode.class);
+
+            Assertions.assertAll(
+                ()->Assertions.assertEquals(body.get(MESSAGE_RESPONSE_PROPERTY).textValue(),
+                        PropertyAlreadyBookedException.ERROR_MESSAGE),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.START_TRY_TO_BOOK),
+                        overlapPatchInput.updatePayload.get("start")),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.END_TRY_TO_BOOK),
+                        overlapPatchInput.updatePayload.get("end")),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.START_BOOKED),
+                        overlapPatchInput.initialPayload.get("start")),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.END_BOOKED),
+                        overlapPatchInput. updatePayload.get("end"))
+            );
+        }
+
+    }
+
+
+
+
+    private void verifyOverlap(final JsonNode bookTry, final JsonNode initialBook) {
+        var validatable = executePost(bookTry.toString(), HttpStatus.SC_BAD_REQUEST);
+        var body = validatable.extract().body().as(JsonNode.class);
+
+        Assertions.assertAll(
+                ()->Assertions.assertEquals(body.get(MESSAGE_RESPONSE_PROPERTY).textValue(),
+                        PropertyAlreadyBookedException.ERROR_MESSAGE),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.START_TRY_TO_BOOK), bookTry.get("start")),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.END_TRY_TO_BOOK), bookTry.get("end")),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.START_BOOKED), initialBook.get("start")),
+                ()->Assertions.assertEquals(body.get(OverlapMessageWrapper.END_BOOKED), initialBook.get("end"))
+        );
+    }
+
+
     private Booking getBooking(final String url) {
         return
             given()
@@ -194,8 +375,6 @@ public class BookingResourceTest {
             .then()
                 .extract().body().as(Booking.class);
     }
-
-
 
     private static void checkViolations(final JsonNode response,
                                         final List<ExpectedValidationMessagesPerPath> expectedValidationMessagesPerPath) {
@@ -207,7 +386,7 @@ public class BookingResourceTest {
         Assertions.assertAll(
             () -> expectedValidationMessagesPerPath.forEach(e ->
                 Assertions.assertTrue(violations.stream().anyMatch(i ->
-                    e.path.equals(i.get("path").asText()) && e.message.equals(i.get("message").asText())
+                    e.path.equals(i.get("path").asText()) && e.message.equals(i.get(MESSAGE_RESPONSE_PROPERTY).asText())
             )))
         );
     }
@@ -224,6 +403,14 @@ public class BookingResourceTest {
     static class ExpectedValidationMessagesPerPath{
         String path;
         String message;
+    }
+
+    @Builder
+    static class OverlapPatchInput{
+        int expectedStatus;
+        String location;
+        JsonNode updatePayload;
+        JsonNode initialPayload;
     }
 }
 

@@ -13,6 +13,4 @@ public @interface DateAfter {
     String message() default "start date greater than end date";
     Class<?>[] groups() default {};
     Class<? extends Payload>[] payload() default {};
-    String start();
-    String end();
 }

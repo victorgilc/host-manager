@@ -1,11 +1,13 @@
 {
   "start_version": {
-    "guest_name": "Harry",
+    "property_id": 555,
+    "person_id": 456,
     "start": "2024-01-15",
-    "end": "2024-01-20"
+    "end": "2024-01-20",
+    "type": "BOOKING"
   },
   "update_version": {
-    "guest_name": "Harry Potter",
+    "person_id": 123,
     "start": "2024-01-17",
     "end": "2024-01-22"
   }
