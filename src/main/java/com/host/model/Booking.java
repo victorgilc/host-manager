@@ -6,11 +6,13 @@ import com.host.validator.DateAfter;
 import io.quarkus.hibernate.orm.panache.PanacheEntity;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotNull;
+import lombok.ToString;
 
 import java.time.LocalDate;
 
 @Entity
 @DateAfter
+@ToString
 public class Booking extends PanacheEntity {
     public static final String PERSON_ID = "person_id";
     public static final String START = "start";
@@ -18,7 +20,8 @@ public class Booking extends PanacheEntity {
     public static final String START_DATE = "start_date";
     public static final String END = "end";
     public static final String END_DATE = "end_date";
-    public static final String OVERLAP_DATES_BY_PROPERTY_QUERY = "propertyId = ?1 and ((start < ?2 and end > ?2) or (start < ?3 and end > ?3) or (start > ?2 and end < ?3))";
+    public static final String OVERLAP_DATES_BY_PROPERTY_QUERY = "propertyId = ?1 and ((start < ?2 and end > ?2) or (start < ?3 and end > ?3) or (start > ?2 and end < ?3)) and" +
+            " canceled = false";
     @NotNull
     @Column(name = PROPERTY_ID)
     @JsonProperty(PROPERTY_ID)

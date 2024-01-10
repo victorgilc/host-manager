@@ -11,6 +11,7 @@ import java.util.Objects;
 @ApplicationScoped
 public class BookingServiceImpl implements BookingService{
 
+    @Transactional
     public void create(final Booking booking) {
         verifyAlreadyBooked(booking, Booking.findIfDateIsBooked(booking));
         booking.persistAndFlush();
@@ -19,7 +20,8 @@ public class BookingServiceImpl implements BookingService{
     public void update(final Long id,
                        final Booking booking){
         final Booking dbBooking = get(id);
-        verifyAlreadyBooked(booking, Booking.findIfDateIsBookedForUpdate(id, dbBooking));
+        System.out.println(Booking.findAll());
+        verifyAlreadyBooked(booking, Booking.findIfDateIsBookedForUpdate(id, booking));
 
         if(Objects.nonNull(booking.personId)){
             dbBooking.personId = booking.personId;
@@ -38,7 +40,7 @@ public class BookingServiceImpl implements BookingService{
         }
     }
 
-    private static void verifyAlreadyBooked(Booking booking, Booking alreadyBooked) {
+    private static void verifyAlreadyBooked(final Booking booking, final Booking alreadyBooked) {
         if(Objects.nonNull(alreadyBooked)){
             throw new PropertyAlreadyBookedException(alreadyBooked, booking);
         }

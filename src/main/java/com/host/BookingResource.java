@@ -6,7 +6,6 @@ import com.host.exception.*;
 import com.host.model.Booking;
 import com.host.service.BookingService;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import jakarta.validation.Valid;
@@ -37,23 +36,13 @@ public class BookingResource {
     ObjectMapper objectMapper;
 
     @POST
-    @Transactional
     public Response create(@Valid final Booking booking) {
         try{
             bookingService.create(booking);
             final URI bookingUri = UriBuilder.fromPath(ROOT_PATH+booking.id).build();
             return Response.created(bookingUri).build();
         } catch(final PropertyAlreadyBookedException e){
-            var overlapMessageWrapper = OverlapMessageWrapper.builder()
-                .message(e.getMessage())
-                    .endBooked(e.alreadyBooked.end)
-                    .startBooked(e.alreadyBooked.start)
-                    .startTryToBook(e.triedToBook.start)
-                    .endTryToBook(e.triedToBook.end)
-                .build();
-            return Response.status(Response.Status.BAD_REQUEST)
-                .entity(overlapMessageWrapper)
-                .build();
+            return returnBadRequestForProperyAlreadyBooked(e);
         }
     }
 
@@ -64,10 +53,12 @@ public class BookingResource {
                            final Booking toUpdateBooking) {
         try {
           bookingService.update(id, toUpdateBooking);
-        } catch(final ResourceDoesNotExistException e){
+        } catch(final PropertyAlreadyBookedException e){
+            return returnBadRequestForProperyAlreadyBooked(e);
+        }  catch(final ResourceDoesNotExistException e){
             return returnBadRequestWithExceptionMessage(e);
         } catch(final RuntimeException e){
-            if(e.getCause().getCause() instanceof ConstraintViolationException constraintViolation){
+            if(e.getCause()!=null && e.getCause().getCause() instanceof ConstraintViolationException constraintViolation){
                 final Set<ConstraintViolation<?>> violations = constraintViolation.getConstraintViolations();
                 final ConstraintViolationStructure constraintViolationStructure = new ConstraintViolationStructure();
                 final List<ConstraintViolationStructure.ParameterViolation> parameterViolations = new ArrayList<>();
@@ -80,9 +71,21 @@ public class BookingResource {
                     .entity(violationsJson)
                     .build();
             }
-            log.error(e.getMessage(), e);
         }
         return Response.noContent().build();
+    }
+
+    private static Response returnBadRequestForProperyAlreadyBooked(PropertyAlreadyBookedException e) {
+        var overlapMessageWrapper = OverlapMessageWrapper.builder()
+                .message(e.getMessage())
+                .endBooked(e.alreadyBooked.end)
+                .startBooked(e.alreadyBooked.start)
+                .startTryToBook(e.triedToBook.start)
+                .endTryToBook(e.triedToBook.end)
+                .build();
+        return Response.status(Response.Status.BAD_REQUEST)
+                .entity(overlapMessageWrapper)
+                .build();
     }
 
     @DELETE
